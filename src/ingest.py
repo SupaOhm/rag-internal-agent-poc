@@ -47,8 +47,10 @@ def _indexed_sources() -> set[str]:
         for meta in data.get("metadatas") or []:
             if meta and "source" in meta:
                 sources.add(meta["source"])
-    except Exception:
-        pass
+    except Exception as exc:
+        # Surface the failure: an empty set here silently causes full
+        # re-ingestion (e.g. if chroma_db/ is corrupted).
+        print(f"[ingest] warning: could not read existing sources: {exc}")
     return sources
 
 
