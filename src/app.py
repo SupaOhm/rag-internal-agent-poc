@@ -15,17 +15,22 @@ st.set_page_config(page_title="RAG Internal Agent", page_icon="📚", layout="ce
 st.title("📚 RAG Internal Agent")
 st.caption("Drop PDFs or TXT files into /docs — they are ingested automatically.")
 
-# Start watcher + ingest existing docs once per session
-if "ready" not in st.session_state:
-    with st.spinner("Scanning /docs for existing files..."):
-        ingest_existing()
-    start_watcher()
-    st.session_state.ready = True
 
-# Build chain once per session
-if "chain" not in st.session_state:
-    with st.spinner("Initialising RAG chain..."):
-        st.session_state.chain = build_chain()
+# cache_resource is process-wide (shared across sessions/tabs), so the watcher
+# and chain are each created exactly once regardless of how many tabs connect.
+@st.cache_resource(show_spinner="Scanning /docs and starting watcher…")
+def init_watcher():
+    ingest_existing()
+    return start_watcher()
+
+
+@st.cache_resource(show_spinner="Initialising RAG chain…")
+def get_chain():
+    return build_chain()
+
+
+init_watcher()
+chain = get_chain()
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -45,7 +50,7 @@ if prompt := st.chat_input("Ask a question about your documents…"):
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking…"):
-            result = ask(st.session_state.chain, prompt)
+            result = ask(chain, prompt)
         st.write(result["answer"])
         if result["sources"]:
             st.caption("Sources: " + ", ".join(result["sources"]))
