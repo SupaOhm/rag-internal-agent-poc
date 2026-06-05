@@ -4,7 +4,7 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 from dotenv import load_dotenv
@@ -29,7 +29,7 @@ def get_vectorstore():
     global _vectorstore
     with _vs_lock:
         if _vectorstore is None:
-            embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+            embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
             _vectorstore = Chroma(
                 persist_directory=str(CHROMA_DIR),
                 embedding_function=embeddings,
