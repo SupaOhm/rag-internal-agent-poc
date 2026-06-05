@@ -1,3 +1,6 @@
+import os
+import re
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
@@ -8,6 +11,13 @@ from dotenv import load_dotenv
 from ingest import get_vectorstore
 
 load_dotenv()
+
+# Models are env-configurable so quota/billing changes don't need a code edit.
+# Free-tier daily request caps are small (e.g. gemini-2.5-flash = 20/day), so
+# the primary model falls back to a second model that has its OWN daily quota
+# bucket when the primary is exhausted.
+_CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
+_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite")
 
 # ---------------------------------------------------------------------------
 # Semantic path — answer a specific question from the few most relevant chunks.
@@ -25,26 +35,17 @@ _PROMPT = ChatPromptTemplate.from_messages(
 )
 
 # ---------------------------------------------------------------------------
-# Router — classify the query so aggregate/exhaustive questions ("how many",
-# "list all") don't go through similarity search, which only ever returns the
-# top-k most similar chunks and silently misses the rest of the corpus.
-# A cheap model is enough for a one-word label; reserve the strong model for
-# the actual answer.
+# Router — classify aggregate/exhaustive questions ("how many", "list all") so
+# they map-reduce over the whole corpus instead of top-k similarity (which
+# silently misses chunks). This is a regex heuristic, NOT an LLM call: under a
+# tight free-tier request budget, spending an API call just to route every
+# query is wasteful, so we keep routing free and deterministic.
 # ---------------------------------------------------------------------------
-_ROUTER_PROMPT = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "Classify the user's question into exactly one label:\n"
-            "- aggregate: needs the WHOLE corpus — counting, listing all, "
-            "enumerating, or summarising across every document "
-            "(e.g. 'how many projects', 'list all', 'what are all the ...').\n"
-            "- semantic: a specific fact answerable from a few passages "
-            "(e.g. 'what is OpsBot', 'who is the mentor').\n"
-            "Reply with ONLY the single word: aggregate or semantic.",
-        ),
-        ("human", "{input}"),
-    ]
+_AGGREGATE_RE = re.compile(
+    r"\b(how many|how much|number of|count of|total number|list (all|every)|"
+    r"name all|name every|all (the |of )|every |each (of |document)|"
+    r"what are all|give me all|enumerate|altogether)\b",
+    re.IGNORECASE,
 )
 
 # ---------------------------------------------------------------------------
@@ -80,32 +81,54 @@ _REDUCE_PROMPT = ChatPromptTemplate.from_messages(
 _MAP_BATCH_CHARS = 24000
 
 
-class RagChain:
-    """Bundles the router, the semantic retrieval chain, and the shared LLMs so
-    `ask()` can dispatch a query down the right path."""
+def _build_llm():
+    """Primary chat model with an automatic fallback to a second model that has
+    a separate daily quota bucket, so a 429 on the primary doesn't dead-end."""
+    primary = ChatGoogleGenerativeAI(model=_CHAT_MODEL, temperature=0)
+    if _FALLBACK_MODEL and _FALLBACK_MODEL != _CHAT_MODEL:
+        fallback = ChatGoogleGenerativeAI(model=_FALLBACK_MODEL, temperature=0)
+        return primary.with_fallbacks([fallback])
+    return primary
 
-    def __init__(self, llm, router_llm, retrieval_chain):
+
+def _is_quota_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return "RESOURCE_EXHAUSTED" in msg or "429" in msg
+
+
+def _quota_message(exc: Exception) -> str:
+    """Friendly, non-crashing message for a daily-quota 429."""
+    retry = re.search(r"retry in ([0-9.]+)s", str(exc))
+    when = f" Try again in ~{int(float(retry.group(1)))}s" if retry else ""
+    return (
+        "⚠️ Gemini free-tier quota reached for both the primary and fallback "
+        f"models.{when}, or set GEMINI_CHAT_MODEL to another model / enable "
+        "billing. (No answer was generated.)"
+    )
+
+
+class RagChain:
+    """Bundles the semantic retrieval chain and the shared LLM so `ask()` can
+    dispatch a query down the right path."""
+
+    def __init__(self, llm, retrieval_chain):
         self.llm = llm
         self.retrieval_chain = retrieval_chain
-        self._router = _ROUTER_PROMPT | router_llm
 
     def classify(self, question: str) -> str:
-        label = self._router.invoke({"input": question}).content.strip().lower()
-        # Default to semantic on anything unexpected — it's the cheaper path.
-        return "aggregate" if "aggregate" in label else "semantic"
+        # Heuristic, zero-cost routing — default to the cheaper semantic path.
+        return "aggregate" if _AGGREGATE_RE.search(question) else "semantic"
 
 
 def build_chain():
     # Shares the single per-process vector store, so documents ingested by the
     # background watcher are immediately retrievable.
     vectorstore = get_vectorstore()
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
-    # Cheap model for the one-word routing decision.
-    router_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0)
+    llm = _build_llm()
     doc_chain = create_stuff_documents_chain(llm, _PROMPT)
     retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
     retrieval_chain = create_retrieval_chain(retriever, doc_chain)
-    return RagChain(llm, router_llm, retrieval_chain)
+    return RagChain(llm, retrieval_chain)
 
 
 def _batches(docs, budget: int):
@@ -157,11 +180,16 @@ def _aggregate_answer(chain: "RagChain", question: str) -> dict:
 
 def ask(chain: "RagChain", question: str) -> dict:
     route = chain.classify(question)
-    if route == "aggregate":
-        return _aggregate_answer(chain, question)
+    try:
+        if route == "aggregate":
+            return _aggregate_answer(chain, question)
 
-    result = chain.retrieval_chain.invoke({"input": question})
-    sources = sorted(
-        {doc.metadata.get("source", "unknown") for doc in result["context"]}
-    )
-    return {"answer": result["answer"], "sources": sources, "route": "semantic"}
+        result = chain.retrieval_chain.invoke({"input": question})
+        sources = sorted(
+            {doc.metadata.get("source", "unknown") for doc in result["context"]}
+        )
+        return {"answer": result["answer"], "sources": sources, "route": "semantic"}
+    except Exception as exc:
+        if _is_quota_error(exc):
+            return {"answer": _quota_message(exc), "sources": [], "route": route, "error": True}
+        raise
