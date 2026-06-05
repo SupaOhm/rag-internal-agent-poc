@@ -71,15 +71,17 @@ def _wait_until_stable(filepath: str, timeout: float = 30.0) -> None:
         waited += 0.5
 
 
-def ingest_file(filepath: str, skip_if_indexed: bool = True):
+def ingest_file(filepath: str, skip_if_indexed: bool = True) -> int:
+    """Load, split, and add a file to the vector store. Returns the number of
+    chunks added (0 if skipped or empty)."""
     path = Path(filepath)
     if path.suffix.lower() not in (".pdf", ".txt"):
-        return
+        return 0
 
     with _ingest_lock:
         if skip_if_indexed and path.name in _indexed_sources():
             print(f"[ingest] {path.name} already indexed, skipping")
-            return
+            return 0
 
         if path.suffix.lower() == ".pdf":
             loader = PyPDFLoader(str(path))
@@ -92,13 +94,14 @@ def ingest_file(filepath: str, skip_if_indexed: bool = True):
 
         if not chunks:
             print(f"[ingest] {path.name} produced no text, skipping")
-            return
+            return 0
 
         for chunk in chunks:
             chunk.metadata["source"] = path.name
 
         get_vectorstore().add_documents(chunks)
         print(f"[ingest] {path.name} → {len(chunks)} chunks added")
+        return len(chunks)
 
 
 class DocHandler(FileSystemEventHandler):
@@ -142,3 +145,74 @@ def ingest_existing():
                 ingest_file(str(f))
             except Exception as exc:
                 print(f"[ingest] error processing {f.name}: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Admin API — upload, list, and delete documents. Kept here (not in the chat
+# app) so the admin surface shares the exact same ingestion path as /docs:
+# files always land in DOCS_DIR and go through ingest_file().
+# ---------------------------------------------------------------------------
+SUPPORTED_SUFFIXES = (".pdf", ".txt")
+
+
+def remove_source(name: str) -> int:
+    """Delete every chunk belonging to `name` from the vector store. Returns the
+    number of chunks removed."""
+    vs = get_vectorstore()
+    with _ingest_lock:
+        data = vs.get(where={"source": name})
+        ids = data.get("ids") or []
+        if ids:
+            vs.delete(ids=ids)
+        return len(ids)
+
+
+def save_upload(filename: str, data: bytes) -> Path:
+    """Persist uploaded bytes into /docs, sanitising the name to block path
+    traversal (only the final path component is kept)."""
+    DOCS_DIR.mkdir(exist_ok=True)
+    safe_name = Path(filename).name
+    if not safe_name or Path(safe_name).suffix.lower() not in SUPPORTED_SUFFIXES:
+        raise ValueError(f"unsupported or invalid filename: {filename!r}")
+    dest = DOCS_DIR / safe_name
+    dest.write_bytes(data)
+    return dest
+
+
+def ingest_upload(filename: str, data: bytes) -> dict:
+    """Admin entrypoint: save an uploaded file to /docs and (re)ingest it.
+
+    Re-uploading the same name replaces its existing chunks, so editing and
+    re-uploading a document updates the index instead of duplicating it.
+    Returns {"name", "chunks", "replaced"}.
+    """
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SUPPORTED_SUFFIXES:
+        raise ValueError(f"{filename}: unsupported type (only .pdf/.txt)")
+
+    dest = save_upload(filename, data)
+    replaced = remove_source(dest.name)
+    chunks = ingest_file(str(dest), skip_if_indexed=False)
+    return {"name": dest.name, "chunks": chunks, "replaced": replaced}
+
+
+def delete_document(name: str) -> int:
+    """Remove a document from both the index and /docs so it is not re-ingested
+    on the next startup. Returns chunks removed."""
+    removed = remove_source(name)
+    safe = DOCS_DIR / Path(name).name
+    if safe.exists():
+        safe.unlink()
+    return removed
+
+
+def indexed_summary() -> dict[str, int]:
+    """Map of indexed source filename → chunk count."""
+    vs = get_vectorstore()
+    data = vs.get(include=["metadatas"])
+    counts: dict[str, int] = {}
+    for meta in data.get("metadatas") or []:
+        src = (meta or {}).get("source")
+        if src:
+            counts[src] = counts.get(src, 0) + 1
+    return counts
