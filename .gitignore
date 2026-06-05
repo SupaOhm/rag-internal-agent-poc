@@ -9,3 +9,6 @@ dist/
 build/
 .venv/
 venv/
+
+# WSL artifacts
+*:Zone.Identifier

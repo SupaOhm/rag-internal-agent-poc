@@ -11,8 +11,8 @@ from agent import build_chain, ask
 
 load_dotenv()
 
-st.set_page_config(page_title="RAG Internal Agent", page_icon="📚", layout="centered")
-st.title("📚 RAG Internal Agent")
+st.set_page_config(page_title="RAG Test", page_icon="📚", layout="centered")
+st.title("RAG Test")
 st.caption("Drop PDFs or TXT files into /docs — they are ingested automatically.")
 
 
