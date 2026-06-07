@@ -1,3 +1,4 @@
+import re
 import threading
 import time
 from pathlib import Path
@@ -8,6 +9,58 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 from dotenv import load_dotenv
+
+
+class IngestQuotaError(Exception):
+    """Free-tier embedding quota exhausted after retries."""
+
+
+class IngestError(Exception):
+    """Unrecoverable ingestion error (not quota-related)."""
+
+
+# Free tier: 100 embed requests/min. Keep batches under that with headroom.
+_EMBED_BATCH = 80
+_EMBED_BATCH_PAUSE = 5.0   # seconds between batches
+_EMBED_MAX_RETRIES = 3
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return "RESOURCE_EXHAUSTED" in msg or "429" in msg
+
+
+def _retry_delay(exc: Exception) -> float:
+    """Parse the suggested retryDelay from the error, default 65s."""
+    m = re.search(r"retryDelay.*?(\d+)s", str(exc))
+    return float(m.group(1)) + 5 if m else 65.0
+
+
+def _add_documents_with_retry(vs, chunks: list) -> None:
+    """Add chunks in batches, retrying each batch on quota errors."""
+    batches = [chunks[i:i + _EMBED_BATCH] for i in range(0, len(chunks), _EMBED_BATCH)]
+    for idx, batch in enumerate(batches):
+        if idx > 0:
+            time.sleep(_EMBED_BATCH_PAUSE)
+        for attempt in range(_EMBED_MAX_RETRIES + 1):
+            try:
+                vs.add_documents(batch)
+                break
+            except Exception as exc:
+                if _is_quota_error(exc):
+                    if attempt >= _EMBED_MAX_RETRIES:
+                        raise IngestQuotaError(
+                            "Google embedding quota exceeded (free tier: 100 requests/min). "
+                            "The document is too large to ingest in one go on the free plan.\n"
+                            "Options:\n"
+                            "  • Wait ~1 min and retry with a smaller file\n"
+                            "  • Upgrade your plan: https://ai.dev/rate-limit"
+                        ) from exc
+                    delay = _retry_delay(exc)
+                    print(f"[ingest] quota hit — waiting {delay:.0f}s (retry {attempt + 1}/{_EMBED_MAX_RETRIES})…")
+                    time.sleep(delay)
+                else:
+                    raise IngestError(f"Embedding failed: {exc}") from exc
 
 load_dotenv()
 
@@ -99,7 +152,7 @@ def ingest_file(filepath: str, skip_if_indexed: bool = True) -> int:
         for chunk in chunks:
             chunk.metadata["source"] = path.name
 
-        get_vectorstore().add_documents(chunks)
+        _add_documents_with_retry(get_vectorstore(), chunks)
         print(f"[ingest] {path.name} → {len(chunks)} chunks added")
         return len(chunks)
 

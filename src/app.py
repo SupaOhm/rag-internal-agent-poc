@@ -1,4 +1,5 @@
 import sys
+import threading
 from pathlib import Path
 
 # Allow imports from src/ when running as `streamlit run src/app.py`
@@ -18,9 +19,11 @@ st.caption("Drop PDFs or TXT files into /docs — they are ingested automaticall
 
 # cache_resource is process-wide (shared across sessions/tabs), so the watcher
 # and chain are each created exactly once regardless of how many tabs connect.
-@st.cache_resource(show_spinner="Scanning /docs and starting watcher…")
+@st.cache_resource(show_spinner="Starting watcher…")
 def init_watcher():
-    ingest_existing()
+    # ingest_existing can take a long time (quota retries, large files).
+    # Run it in the background so the UI becomes usable immediately.
+    threading.Thread(target=ingest_existing, daemon=True).start()
     return start_watcher()
 
 

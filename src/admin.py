@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import streamlit as st
 from dotenv import load_dotenv
-from ingest import ingest_upload, indexed_summary, delete_document, SUPPORTED_SUFFIXES
+from ingest import ingest_upload, indexed_summary, delete_document, SUPPORTED_SUFFIXES, IngestQuotaError, IngestError
 
 load_dotenv()
 
@@ -36,11 +36,33 @@ uploaded = st.file_uploader(
 
 if uploaded and st.button("Ingest", type="primary"):
     for f in uploaded:
-        with st.spinner(f"Ingesting {f.name}…"):
+        with st.spinner(f"Ingesting {f.name}… (large files may pause to respect API rate limits)"):
             try:
                 result = ingest_upload(f.name, f.getvalue())
+            except IngestQuotaError:
+                st.error(
+                    f"**{f.name} — quota exceeded**\n\n"
+                    "You've hit the free-tier embedding limit (100 requests/min). "
+                    "The file has too many chunks to ingest in one go.\n\n"
+                    "**What to do:**\n"
+                    "- Wait ~1 minute and try again\n"
+                    "- Upgrade your Google AI Studio plan to raise the limit: "
+                    "https://ai.dev/rate-limit"
+                )
+                continue
+            except IngestError as exc:
+                st.error(
+                    f"**{f.name} — ingestion failed**\n\n"
+                    f"{exc}\n\n"
+                    "Check your `GOOGLE_API_KEY` in `.env` and that the file is a valid PDF/TXT."
+                )
+                continue
             except Exception as exc:
-                st.error(f"{f.name}: {exc}")
+                st.error(
+                    f"**{f.name} — unexpected error**\n\n"
+                    f"`{type(exc).__name__}: {exc}`\n\n"
+                    "If this keeps happening, check the terminal for the full stack trace."
+                )
                 continue
         verb = "re-ingested (replaced existing)" if result["replaced"] else "ingested"
         st.success(f"{result['name']} {verb} — {result['chunks']} chunks")
