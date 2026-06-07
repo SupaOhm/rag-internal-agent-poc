@@ -41,14 +41,30 @@ pip install -r requirements.txt
 ### 4. Run the app
 
 ```bash
-streamlit run src/app.py
+python run.py
 ```
 
-The browser opens at `http://localhost:8501`.
+Starts both interfaces at once:
+
+| Interface | Default URL |
+|-----------|-------------|
+| User chat | `http://localhost:8501` |
+| Admin (document upload) | `http://localhost:8502` |
+
+If a port is already in use, the launcher picks the next free port and prints the actual URLs. Press **Ctrl+C** to stop both.
+
+<details>
+<summary>Run individually</summary>
+
+```bash
+streamlit run src/app.py               # user chat  (port 8501)
+streamlit run src/admin.py             # admin UI   (port 8502)
+```
+</details>
 
 ### 5. Add documents
 
-Drop any **PDF** or **TXT** file into the `/docs` folder.
+Drop any **PDF** or **TXT** file into the `/docs` folder, or use the **Admin** UI to upload directly from the browser.
 The watcher picks it up automatically and ingests it into ChromaDB — no restart needed.
 
 ---
@@ -62,7 +78,9 @@ rag-internal-agent-poc/
 ├── src/
 │   ├── ingest.py      ← file watcher + ChromaDB ingestion
 │   ├── agent.py       ← RAG chain (LangChain + Gemini)
-│   └── app.py         ← Streamlit chat UI
+│   ├── app.py         ← Streamlit chat UI (user)
+│   └── admin.py       ← Streamlit admin UI (document upload)
+├── run.py             ← one-command launcher for both UIs
 ├── .env.example       ← copy to .env and add your API key
 ├── .gitignore
 ├── requirements.txt
