@@ -21,7 +21,7 @@ from ingest import ingest_upload, indexed_summary, delete_document, SUPPORTED_SU
 load_dotenv()
 
 st.set_page_config(page_title="Admin · Document Ingest", page_icon="🛠️", layout="centered")
-st.title("🛠️ Admin — Document Ingest")
+st.title("Admin — Document Ingest")
 st.caption(
     "Upload PDF or TXT files. They are saved to /docs and converted into the "
     "RAG index — the same path used when dropping files into /docs directly."
