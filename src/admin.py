@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import streamlit as st
 from dotenv import load_dotenv
 from ingest import ingest_upload, indexed_summary, delete_document, SUPPORTED_SUFFIXES, IngestQuotaError, IngestError
+import usage
 
 load_dotenv()
 
@@ -85,3 +86,45 @@ else:
             removed = delete_document(name)
             st.toast(f"Deleted {name} ({removed} chunks)")
             st.rerun()
+
+
+# --- Usage & rate limits ----------------------------------------------------
+def _meter(col, label, used, limit):
+    col.caption(label)
+    if limit:
+        col.write(f"**{used}** / {limit}")
+        col.progress(min(used / limit, 1.0))
+        if used >= limit:
+            col.caption("⚠️ at limit")
+    else:
+        col.write(f"**{used}** / ?")
+
+
+usage.prune()  # keep the on-disk log bounded
+
+st.divider()
+st.subheader("Usage & rate limits")
+
+secs = usage.seconds_to_reset()
+hrs, mins = divmod(secs // 60, 60)
+top_l, top_r = st.columns([3, 1])
+top_l.caption(
+    "Self-tracked from this app's own API calls (chat + embeddings). Google "
+    "exposes no usage API, so these are our counts, not Google's. Daily "
+    f"counts reset in **{hrs}h {mins}m** (midnight Pacific)."
+)
+if top_r.button("🔄 Refresh"):
+    st.rerun()
+
+data = usage.stats()
+if not data:
+    st.info("No API calls recorded yet. Ask a question or ingest a file, then refresh.")
+else:
+    for model in sorted(data):
+        d = data[model]
+        lim = d.get("limit") or {}
+        st.markdown(f"**{model}**")
+        c1, c2, c3 = st.columns(3)
+        _meter(c1, "Requests today (RPD)", d["rpd"], lim.get("rpd"))
+        _meter(c2, "Requests / min (RPM)", d["rpm"], lim.get("rpm"))
+        _meter(c3, "Tokens / min (TPM)", d["tpm"], lim.get("tpm"))

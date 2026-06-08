@@ -10,6 +10,24 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 from dotenv import load_dotenv
 
+import usage
+
+
+class TrackedGoogleEmbeddings(GoogleGenerativeAIEmbeddings):
+    """GoogleGenerativeAIEmbeddings that logs each embed request for the admin
+    usage dashboard. Free tier counts one request per embedded text, so a batch
+    of N documents = N requests."""
+
+    def embed_documents(self, texts, *args, **kwargs):
+        out = super().embed_documents(texts, *args, **kwargs)
+        usage.record(self.model, "embed", requests=len(texts))
+        return out
+
+    def embed_query(self, text, *args, **kwargs):
+        out = super().embed_query(text, *args, **kwargs)
+        usage.record(self.model, "embed", requests=1)
+        return out
+
 
 class IngestQuotaError(Exception):
     """Free-tier embedding quota exhausted after retries."""
@@ -82,7 +100,7 @@ def get_vectorstore():
     global _vectorstore
     with _vs_lock:
         if _vectorstore is None:
-            embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+            embeddings = TrackedGoogleEmbeddings(model="models/gemini-embedding-001")
             _vectorstore = Chroma(
                 persist_directory=str(CHROMA_DIR),
                 embedding_function=embeddings,

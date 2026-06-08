@@ -10,8 +10,13 @@ from langchain_classic.chains.combine_documents import create_stuff_documents_ch
 from dotenv import load_dotenv
 
 from ingest import get_vectorstore
+from usage import UsageCallback
 
 load_dotenv()
+
+# One shared callback instance records every chat call (model + tokens) for the
+# admin usage dashboard. Cheap, never raises.
+_USAGE_CB = [UsageCallback()] if UsageCallback else []
 
 # Models are env-configurable so quota/billing changes don't need a code edit.
 # Free-tier daily request caps are small (e.g. gemini-2.5-flash = 20/day), so
@@ -147,9 +152,9 @@ _MAP_BATCH_CHARS = 24000
 def _build_llm():
     """Primary chat model with an automatic fallback to a second model that has
     a separate daily quota bucket, so a 429 on the primary doesn't dead-end."""
-    primary = ChatGoogleGenerativeAI(model=_CHAT_MODEL, temperature=0)
+    primary = ChatGoogleGenerativeAI(model=_CHAT_MODEL, temperature=0, callbacks=_USAGE_CB)
     if _FALLBACK_MODEL and _FALLBACK_MODEL != _CHAT_MODEL:
-        fallback = ChatGoogleGenerativeAI(model=_FALLBACK_MODEL, temperature=0)
+        fallback = ChatGoogleGenerativeAI(model=_FALLBACK_MODEL, temperature=0, callbacks=_USAGE_CB)
         return primary.with_fallbacks([fallback])
     return primary
 
