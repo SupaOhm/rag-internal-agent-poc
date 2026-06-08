@@ -8,11 +8,15 @@ Streamlit chat UI — all free, no credit card required.
 
 | Component | Package |
 |-----------|---------|
-| LLM | Gemini 2.0 Flash via `langchain-google-genai` |
-| Embeddings | `models/embedding-001` (Google AI Studio, free) |
+| LLM | Gemini 2.5 Flash (with 2.5 Flash-Lite fallback) via `langchain-google-genai` |
+| Embeddings | `models/gemini-embedding-001` (Google AI Studio, free) |
 | Vector store | ChromaDB (local, persistent) |
 | UI | Streamlit |
 | File watching | Watchdog |
+
+The chat model and its fallback are configurable via the `GEMINI_CHAT_MODEL` and
+`GEMINI_FALLBACK_MODEL` env vars. When the primary model hits its free-tier
+quota, the agent automatically retries on the fallback model.
 
 ---
 
@@ -20,7 +24,10 @@ Streamlit chat UI — all free, no credit card required.
 
 ### 1. Get a free Google AI Studio API key
 
-Go to <https://aistudio.google.com> → **Get API key** (no credit card needed, 1 500 req/day free).
+Go to <https://aistudio.google.com> → **Get API key** (no credit card needed).
+
+> Free-tier limits are small and per-model (e.g. `gemini-2.5-flash` ≈ 20 requests/day,
+> 5 requests/min). The Admin UI shows live usage against these caps — see below.
 
 ### 2. Configure your API key
 
@@ -28,6 +35,9 @@ Go to <https://aistudio.google.com> → **Get API key** (no credit card needed, 
 cp .env.example .env
 # Open .env and replace "your-key-here" with your real key
 ```
+
+Optional env vars: `GEMINI_CHAT_MODEL` (default `gemini-2.5-flash`) and
+`GEMINI_FALLBACK_MODEL` (default `gemini-2.5-flash-lite`) override the models used.
 
 ### 3. Install dependencies
 
@@ -75,11 +85,13 @@ The watcher picks it up automatically and ingests it into ChromaDB — no restar
 rag-internal-agent-poc/
 ├── docs/              ← drop files here to auto-ingest
 ├── chroma_db/         ← vector store (auto-created, git-ignored)
+├── usage_events.jsonl ← self-tracked API usage log (auto-created, git-ignored)
 ├── src/
 │   ├── ingest.py      ← file watcher + ChromaDB ingestion
-│   ├── agent.py       ← RAG chain (LangChain + Gemini)
+│   ├── agent.py       ← RAG chain (LangChain + Gemini) + session memory
+│   ├── usage.py       ← self-tracked API usage + rate-limit counters
 │   ├── app.py         ← Streamlit chat UI (user)
-│   └── admin.py       ← Streamlit admin UI (document upload)
+│   └── admin.py       ← Streamlit admin UI (upload + usage dashboard)
 ├── run.py             ← one-command launcher for both UIs
 ├── .env.example       ← copy to .env and add your API key
 ├── .gitignore
@@ -95,8 +107,22 @@ rag-internal-agent-poc/
 3. Chunks are stored in a local **ChromaDB** collection that persists between
    sessions.
 4. When you ask a question, the top-4 most relevant chunks are retrieved and
-   passed to **Gemini 2.0 Flash** to generate an answer.
+   passed to **Gemini 2.5 Flash** to generate an answer.
 5. The source filename is shown below every answer.
+
+### Conversation memory
+
+The chat keeps a short, **session-only** history (nothing is persisted to disk).
+Follow-up questions with pronouns or references ("what about *its* price?") are
+resolved against recent turns into a standalone search query — but only when the
+question actually looks like a follow-up, to avoid wasting an LLM call.
+
+### Usage & rate-limit dashboard
+
+Google exposes no API for current free-tier consumption, so the app counts its
+own calls and appends them to `usage_events.jsonl` (shared across the chat and
+admin processes). The **Admin** UI shows live requests/day, requests/min and
+tokens/min against the known free-tier caps per model.
 
 ## Running on WSL (Windows Subsystem for Linux)
 
@@ -121,6 +147,6 @@ Everything else (install, API key setup, run command) is identical to macOS.
 
 ## Notes
 
-- `chroma_db/` and `.env` are git-ignored — safe to commit the rest.
+- `chroma_db/`, `usage_events.jsonl` and `.env` are git-ignored — safe to commit the rest.
 - Re-starting the app does **not** re-ingest already-indexed files.
 - Tested on macOS (Apple Silicon & Intel), Linux, and WSL2.
