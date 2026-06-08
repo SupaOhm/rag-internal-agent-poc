@@ -53,7 +53,10 @@ if prompt := st.chat_input("Ask a question about your documents…"):
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking…"):
-            result = ask(chain, prompt)
+            # Pass prior turns (everything except the question just appended) so
+            # the agent can resolve follow-up references. Session-only — not
+            # persisted anywhere.
+            result = ask(chain, prompt, history=st.session_state.messages[:-1])
         st.write(result["answer"])
         if result["sources"]:
             st.caption("Sources: " + ", ".join(result["sources"]))
