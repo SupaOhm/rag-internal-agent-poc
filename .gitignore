@@ -12,3 +12,7 @@ venv/
 
 # WSL artifacts
 *:Zone.Identifier
+
+# Local ingestion documents (keep folder via .gitkeep)
+docs/*
+!docs/.gitkeep
