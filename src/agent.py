@@ -2,9 +2,10 @@ import os
 import re
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.documents import Document
-from langchain_classic.chains import create_retrieval_chain
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.output_parsers import StrOutputParser
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from dotenv import load_dotenv
 
@@ -27,12 +28,74 @@ _PROMPT = ChatPromptTemplate.from_messages(
         (
             "system",
             "Use the context below to answer the question.\n"
-            "If the answer is not in the context, say you don't know.\n\n"
+            "If the answer is not in the context, say you don't know.\n"
+            "The chat history is only to resolve references (e.g. pronouns like "
+            "'it', 'they') — do NOT invent facts from it; answers must come from "
+            "the context.\n\n"
             "Context:\n{context}",
         ),
+        MessagesPlaceholder("chat_history"),
         ("human", "{input}"),
     ]
 )
+
+# ---------------------------------------------------------------------------
+# Conversation memory (current session only — nothing is persisted). Two needs:
+#   1. The answer prompt can SEE prior turns (placeholder above).
+#   2. Follow-ups like "who authored it" must be rewritten into a standalone
+#      query BEFORE retrieval, or the vector search matches on the pronoun and
+#      pulls the wrong chunks. The contextualize prompt below does that rewrite.
+# Only the last few turns are kept — long histories burn the tight free-tier
+# token budget and rarely help resolve a reference.
+# ---------------------------------------------------------------------------
+_MAX_HISTORY_MESSAGES = 8
+
+# A query only needs the (extra, quota-costing) rewrite call if it actually
+# leans on earlier turns — i.e. it carries a back-reference (a pronoun, "the
+# same", "above", a leading "and/what about"). Self-contained questions —
+# including short ones like "What is X?" — skip the rewrite and retrieve as-is.
+# Heuristic, zero-cost; biased toward skipping (a missed rewrite just retrieves
+# the literal query, which is the cheap, safe direction under a tight quota).
+_FOLLOWUP_RE = re.compile(
+    r"\b(it|its|it's|they|them|their|theirs|this|that|these|those|he|him|his|"
+    r"she|her|hers|same|above|previous|former|latter|aforementioned)\b"
+    r"|^(and|also|what about|how about|why|then)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_followup(question: str) -> bool:
+    return bool(_FOLLOWUP_RE.search(question.strip()))
+
+
+_CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "Given the chat history and the latest user question — which may "
+            "reference earlier turns — rewrite it as a standalone question that "
+            "is understandable without the history. Do NOT answer it. If it is "
+            "already standalone, return it unchanged.",
+        ),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ]
+)
+
+
+def _to_messages(history) -> list:
+    """Convert app-level {'role','content'} dicts into LangChain messages,
+    keeping only the most recent turns."""
+    if not history:
+        return []
+    msgs = []
+    for m in history[-_MAX_HISTORY_MESSAGES:]:
+        content = m.get("content", "")
+        if m.get("role") == "user":
+            msgs.append(HumanMessage(content=content))
+        elif m.get("role") == "assistant":
+            msgs.append(AIMessage(content=content))
+    return msgs
 
 # ---------------------------------------------------------------------------
 # Router — classify aggregate/exhaustive questions ("how many", "list all") so
@@ -111,9 +174,22 @@ class RagChain:
     """Bundles the semantic retrieval chain and the shared LLM so `ask()` can
     dispatch a query down the right path."""
 
-    def __init__(self, llm, retrieval_chain):
+    def __init__(self, llm, retriever, doc_chain, contextualize_chain):
         self.llm = llm
-        self.retrieval_chain = retrieval_chain
+        self.retriever = retriever
+        self.doc_chain = doc_chain
+        # Rewrites a follow-up into a standalone question before retrieval.
+        self.contextualize_chain = contextualize_chain
+
+    def standalone_question(self, question: str, history: list) -> str:
+        """Resolve references against history, but only spend the LLM call when
+        there's history AND the question actually reads like a follow-up —
+        otherwise retrieve the question as-is and save a request against quota."""
+        if not history or not _looks_like_followup(question):
+            return question
+        return self.contextualize_chain.invoke(
+            {"input": question, "chat_history": history}
+        ).strip()
 
     def classify(self, question: str) -> str:
         # Heuristic, zero-cost routing — default to the cheaper semantic path.
@@ -127,8 +203,8 @@ def build_chain():
     llm = _build_llm()
     doc_chain = create_stuff_documents_chain(llm, _PROMPT)
     retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
-    retrieval_chain = create_retrieval_chain(retriever, doc_chain)
-    return RagChain(llm, retrieval_chain)
+    contextualize_chain = _CONTEXTUALIZE_PROMPT | llm | StrOutputParser()
+    return RagChain(llm, retriever, doc_chain, contextualize_chain)
 
 
 def _batches(docs, budget: int):
@@ -178,17 +254,27 @@ def _aggregate_answer(chain: "RagChain", question: str) -> dict:
     return {"answer": final, "sources": sources, "route": "aggregate"}
 
 
-def ask(chain: "RagChain", question: str) -> dict:
+def ask(chain: "RagChain", question: str, history=None) -> dict:
     route = chain.classify(question)
+    chat_history = _to_messages(history)
     try:
-        if route == "aggregate":
-            return _aggregate_answer(chain, question)
+        # Resolve references ("who authored it") into a standalone query for
+        # retrieval. Gated: only costs an LLM call on genuine follow-ups.
+        search_query = chain.standalone_question(question, chat_history)
 
-        result = chain.retrieval_chain.invoke({"input": question})
-        sources = sorted(
-            {doc.metadata.get("source", "unknown") for doc in result["context"]}
+        if route == "aggregate":
+            return _aggregate_answer(chain, search_query)
+
+        # Retrieve on the resolved query, but answer on the ORIGINAL question so
+        # the model still sees the user's exact wording, plus full chat history.
+        docs = chain.retriever.invoke(search_query)
+        answer = chain.doc_chain.invoke(
+            {"input": question, "chat_history": chat_history, "context": docs}
         )
-        return {"answer": result["answer"], "sources": sources, "route": "semantic"}
+        sources = sorted(
+            {doc.metadata.get("source", "unknown") for doc in docs}
+        )
+        return {"answer": answer, "sources": sources, "route": "semantic"}
     except Exception as exc:
         if _is_quota_error(exc):
             return {"answer": _quota_message(exc), "sources": [], "route": route, "error": True}
