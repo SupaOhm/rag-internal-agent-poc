@@ -1,24 +1,23 @@
 """
-Launch the RAG Internal Agent Streamlit apps.
+Launch the RAG Internal Agent Streamlit apps (chat + admin together).
 
-Run with no arguments for an interactive menu:
+Run with no arguments for an interactive menu to pick the chat backend:
 
   python run.py
 
-Or pick a mode directly (skips the menu):
+Or pick a backend directly (skips the menu):
 
   python run.py --langchain     # User chat (app.py) + admin        [default]
   python run.py --adk           # experimental Google ADK chat + admin
-  python run.py --chat-only     # chat without the admin UI
-  python run.py --admin-only    # admin UI only
 
 Extra flags:
 
   --open        open each app in your browser once it's ready
   -h / --help   show argparse help
 
-Defaults: user chat = 8501, admin = 8502. If a port is taken, the next free
-port is used.
+Both the chat and admin UIs always launch together; each page has a button to
+jump to the other. Defaults: chat = 8501, admin = 8502. If a port is taken, the
+next free port is used.
 """
 import argparse
 import os
@@ -99,23 +98,21 @@ def check_adk_installed() -> bool:
     return True
 
 
-# ── mode selection ───────────────────────────────────────────────────────────
+# ── backend selection ────────────────────────────────────────────────────────
 
-# A mode is (backend, want_admin). backend is "langchain", "adk", or None.
-MODES = {
-    "1": ("User chat + Admin   (LangChain, default)", ("langchain", True)),
-    "2": ("User chat + Admin   (experimental Google ADK)", ("adk", True)),
-    "3": ("User chat only      (LangChain)", ("langchain", False)),
-    "4": ("ADK chat only       (experimental)", ("adk", False)),
-    "5": ("Admin only", (None, True)),
+# Each backend launches its chat UI alongside the shared admin UI.
+BACKENDS = {
+    "1": ("User chat   (LangChain, default)", "langchain"),
+    "2": ("User chat   (experimental Google ADK)", "adk"),
 }
 
 
-def prompt_for_mode() -> tuple[str | None, bool]:
+def prompt_for_backend() -> str:
     print("\n" + "─" * 52)
-    print("  RAG Internal Agent — what do you want to run?")
+    print("  RAG Internal Agent — which chat backend?")
+    print("  (the admin UI always launches alongside it)")
     print("─" * 52)
-    for key, (label, _) in MODES.items():
+    for key, (label, _) in BACKENDS.items():
         print(f"   {key}) {label}")
     print("   q) Quit")
     print("─" * 52)
@@ -129,27 +126,25 @@ def prompt_for_mode() -> tuple[str | None, bool]:
             sys.exit(0)
         if choice == "":
             choice = "1"
-        if choice in MODES:
-            return MODES[choice][1]
+        if choice in BACKENDS:
+            return BACKENDS[choice][1]
         print("  Please choose one of the listed options.")
 
 
-def resolve_mode(args: argparse.Namespace) -> tuple[str | None, bool]:
-    """Turn CLI flags into (backend, want_admin), or fall back to the menu."""
-    if args.admin_only:
-        return (None, True)
-    backend = "adk" if args.adk else "langchain"
-    if args.langchain or args.adk or args.chat_only:
-        return (backend, not args.chat_only)
-    # No mode flag given → interactive menu.
-    return prompt_for_mode()
+def resolve_backend(args: argparse.Namespace) -> str:
+    """Turn CLI flags into a backend name, or fall back to the menu."""
+    if args.adk:
+        return "adk"
+    if args.langchain:
+        return "langchain"
+    return prompt_for_backend()
 
 
 # ── launch ───────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Launch the RAG Internal Agent Streamlit apps.",
+        description="Launch the RAG Internal Agent Streamlit apps (chat + admin).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     group = parser.add_mutually_exclusive_group()
@@ -157,24 +152,13 @@ def main() -> None:
                        help="User chat (LangChain) + admin")
     group.add_argument("--adk", action="store_true",
                        help="experimental Google ADK chat + admin")
-    group.add_argument("--admin-only", action="store_true",
-                       help="admin UI only")
-    parser.add_argument("--chat-only", action="store_true",
-                        help="chat without the admin UI")
     parser.add_argument("--open", dest="open_browser", action="store_true",
                         help="open each app in your browser once it's ready")
     args = parser.parse_args()
 
-    backend, want_admin = resolve_mode(args)
-
-    # Build the list of (label, script) to launch.
-    services: list[tuple[str, str]] = []
-    if backend == "adk":
-        services.append(("ADK chat ", "adk_app.py"))
-    elif backend == "langchain":
-        services.append(("User chat", "app.py"))
-    if want_admin:
-        services.append(("Admin UI ", "admin.py"))
+    backend = resolve_backend(args)
+    chat_script = "adk_app.py" if backend == "adk" else "app.py"
+    chat_label = "ADK chat " if backend == "adk" else "User chat"
 
     print("\n" + "─" * 52)
     print("  RAG Internal Agent — starting up")
@@ -185,14 +169,15 @@ def main() -> None:
     if backend == "adk" and not check_adk_installed():
         sys.exit(1)
 
-    # Assign non-colliding ports.
-    used: set[int] = set()
-    ports: list[int] = []
-    for label, _ in services:
-        preferred = DEFAULT_ADMIN_PORT if label.startswith("Admin") else DEFAULT_USER_PORT
-        port = find_free_port(preferred, used)
-        used.add(port)
-        ports.append(port)
+    # Assign non-colliding ports for chat + admin.
+    user_port = find_free_port(DEFAULT_USER_PORT, set())
+    admin_port = find_free_port(DEFAULT_ADMIN_PORT, {user_port})
+    chat_url = f"http://localhost:{user_port}"
+    admin_url = f"http://localhost:{admin_port}"
+
+    # Each page links to the other; pass the sibling's URL via the environment.
+    chat_env = {**os.environ, "ADMIN_URL": admin_url}
+    admin_env = {**os.environ, "CHAT_URL": chat_url}
 
     procs: list[subprocess.Popen] = []
 
@@ -210,23 +195,23 @@ def main() -> None:
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    urls: list[str] = []
-    for i, ((label, script), port) in enumerate(zip(services, ports), 1):
-        preferred = DEFAULT_ADMIN_PORT if label.startswith("Admin") else DEFAULT_USER_PORT
+    launches = [
+        (chat_label, chat_script, user_port, chat_url, DEFAULT_USER_PORT, chat_env),
+        ("Admin UI ", "admin.py", admin_port, admin_url, DEFAULT_ADMIN_PORT, admin_env),
+    ]
+    for i, (label, script, port, url, preferred, env) in enumerate(launches, 1):
         note = "" if port == preferred else f"  (port {preferred} was taken)"
         procs.append(subprocess.Popen(
-            streamlit_cmd(SRC / script, port),
+            streamlit_cmd(SRC / script, port), env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         ))
-        url = f"http://localhost:{port}"
-        urls.append(url)
-        print(f"  [{i}/{len(services)}] {label}  {url}{note}")
+        print(f"  [{i}/{len(launches)}] {label}  {url}{note}")
 
     # Wait for the apps to start serving, then optionally open browsers.
     print("─" * 52)
     print("  Waiting for apps to come up…", end="", flush=True)
     deadline = time.time() + 30
-    pending = set(ports)
+    pending = {user_port, admin_port}
     while pending and time.time() < deadline:
         for p in procs:
             if p.poll() is not None:
@@ -238,8 +223,8 @@ def main() -> None:
     print(" ready." if not pending else " (still starting).")
 
     if args.open_browser:
-        for url in urls:
-            webbrowser.open(url)
+        webbrowser.open(chat_url)
+        webbrowser.open(admin_url)
 
     print("─" * 52)
     print("  Running. Press Ctrl+C to stop.\n")

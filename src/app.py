@@ -1,3 +1,4 @@
+import os
 import sys
 import threading
 from pathlib import Path
@@ -13,6 +14,12 @@ from agent import build_chain, ask
 load_dotenv()
 
 st.set_page_config(page_title="RAG Test", page_icon="📚", layout="centered")
+
+# ADMIN_URL is set by run.py so the user can jump to the admin console.
+_admin_url = os.getenv("ADMIN_URL")
+if _admin_url:
+    st.sidebar.link_button("🛠️ Open Admin", _admin_url, use_container_width=True)
+
 st.title("RAG Test")
 st.caption("Drop PDFs or TXT files into /docs — they are ingested automatically.")
 

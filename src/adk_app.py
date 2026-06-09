@@ -4,6 +4,7 @@ Parallel to app.py (the LangChain chat). Same UX, same shared watcher/vector
 store — only the answering backend differs. Run on its own port so both can run
 side by side:  streamlit run src/adk_app.py   (or: python run.py --adk)
 """
+import os
 import sys
 import threading
 from pathlib import Path
@@ -19,6 +20,12 @@ from adk_agent import build_app, ask
 load_dotenv()
 
 st.set_page_config(page_title="RAG Test (ADK)", page_icon="🧪", layout="centered")
+
+# ADMIN_URL is set by run.py so the user can jump to the admin console.
+_admin_url = os.getenv("ADMIN_URL")
+if _admin_url:
+    st.sidebar.link_button("🛠️ Open Admin", _admin_url, use_container_width=True)
+
 st.title("RAG Test — ADK")
 st.caption("Experimental Google ADK backend. Drop PDFs/TXT into /docs — ingested automatically.")
 
