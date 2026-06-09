@@ -1,0 +1,6 @@
+# Dependencies for the experimental Google ADK track (src/adk_agent.py,
+# src/adk_app.py). It reuses the shared ingestion/vector-store layer, which
+# still needs the base LangChain stack — so install the base requirements too.
+-r requirements.txt
+
+google-adk>=2.2.0

@@ -1,7 +1,8 @@
 """
 Launch both Streamlit apps (user chat + admin) in one command.
 
-  python run.py
+  python run.py            # LangChain chat (app.py) + admin
+  python run.py --adk      # experimental Google ADK chat (adk_app.py) + admin
 
 Defaults: user=8501, admin=8502. If a port is taken, the next free port is used.
 """
@@ -43,6 +44,12 @@ def streamlit_cmd(script: Path, port: int) -> list[str]:
 
 
 def main() -> None:
+    # --adk swaps the LangChain chat (app.py) for the experimental ADK chat
+    # (adk_app.py). The admin UI is unchanged in both modes.
+    use_adk = "--adk" in sys.argv[1:]
+    chat_script = "adk_app.py" if use_adk else "app.py"
+    chat_label = "ADK chat " if use_adk else "User chat"
+
     user_port = find_free_port(DEFAULT_USER_PORT)
     admin_port = find_free_port(DEFAULT_ADMIN_PORT)
 
@@ -76,10 +83,10 @@ def main() -> None:
     print("─" * 44)
 
     procs.append(subprocess.Popen(
-        streamlit_cmd(SRC / "app.py", user_port),
+        streamlit_cmd(SRC / chat_script, user_port),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     ))
-    print(f"  [1/2] User chat   http://localhost:{user_port}{user_note}")
+    print(f"  [1/2] {chat_label}  http://localhost:{user_port}{user_note}")
 
     procs.append(subprocess.Popen(
         streamlit_cmd(SRC / "admin.py", admin_port),
