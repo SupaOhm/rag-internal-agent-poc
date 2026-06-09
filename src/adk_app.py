@@ -22,9 +22,14 @@ load_dotenv()
 st.set_page_config(page_title="RAG Test (ADK)", page_icon="🧪", layout="centered")
 
 # ADMIN_URL is set by run.py so the user can jump to the admin console.
+# Kept as a small, unobtrusive text link since switching is rare.
 _admin_url = os.getenv("ADMIN_URL")
 if _admin_url:
-    st.sidebar.link_button("🛠️ Open Admin", _admin_url, use_container_width=True)
+    st.markdown(
+        f"<div style='text-align:right'><a href='{_admin_url}' target='_self' "
+        "style='font-size:0.8rem;color:#888;text-decoration:none'>Admin →</a></div>",
+        unsafe_allow_html=True,
+    )
 
 st.title("RAG Test — ADK")
 st.caption("Experimental Google ADK backend. Drop PDFs/TXT into /docs — ingested automatically.")

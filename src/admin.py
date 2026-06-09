@@ -25,9 +25,14 @@ load_dotenv()
 st.set_page_config(page_title="Admin · Document Ingest", page_icon="🛠️", layout="centered")
 
 # CHAT_URL is set by run.py so the admin can jump back to the chat UI.
+# Kept as a small, unobtrusive text link since switching is rare.
 _chat_url = os.getenv("CHAT_URL")
 if _chat_url:
-    st.sidebar.link_button("💬 Open Chat", _chat_url, use_container_width=True)
+    st.markdown(
+        f"<div style='text-align:right'><a href='{_chat_url}' target='_self' "
+        "style='font-size:0.8rem;color:#888;text-decoration:none'>← Chat</a></div>",
+        unsafe_allow_html=True,
+    )
 
 st.title("Admin — Document Ingest")
 st.caption(
