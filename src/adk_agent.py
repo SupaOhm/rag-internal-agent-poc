@@ -160,16 +160,17 @@ def _format_history(history) -> str:
     return "Conversation so far:\n" + "\n".join(lines) + "\n\n"
 
 
-def _record_event_usage(event) -> None:
-    """Log any model token usage on an ADK event to the shared usage log so ADK
-    chat calls appear in the admin dashboard alongside LangChain ones."""
+def _record_event_usage(event, model: str) -> None:
+    """Log token usage on an ADK event to the shared usage log so ADK chat calls
+    appear in the admin dashboard alongside LangChain ones. Events without
+    usage_metadata (e.g. tool-result events) are skipped, so this records once
+    per real LLM call. `model` is the agent's actual model, so fallback calls
+    land in the right per-model quota bucket."""
     meta = getattr(event, "usage_metadata", None)
     if not meta:
         return
     total = getattr(meta, "total_token_count", 0) or 0
-    # ADK doesn't surface the resolved model on the event; attribute to the
-    # configured chat model. Good enough for free-tier RPD/TPM tracking.
-    usage.record(_CHAT_MODEL, "chat", requests=1, tokens=total)
+    usage.record(model, "chat", requests=1, tokens=total)
 
 
 async def _run_agent(app: "AdkRagApp", agent, message: str):
@@ -188,22 +189,30 @@ async def _run_agent(app: "AdkRagApp", agent, message: str):
 
     final_text = ""
     sources: set[str] = set()
-    async for event in runner.run_async(
-        user_id=USER_ID, session_id=session_id, new_message=content
-    ):
-        _record_event_usage(event)
-        # Harvest sources from the retrieve_docs tool response(s).
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                fr = getattr(part, "function_response", None)
-                if fr and fr.name == "retrieve_docs":
-                    resp = fr.response or {}
-                    for s in resp.get("sources", []):
-                        sources.add(s)
-        if event.is_final_response() and event.content and event.content.parts:
-            text = event.content.parts[0].text
-            if text:
-                final_text = text
+    try:
+        async for event in runner.run_async(
+            user_id=USER_ID, session_id=session_id, new_message=content
+        ):
+            _record_event_usage(event, agent.model)
+            # Harvest sources from the retrieve_docs tool response(s).
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    fr = getattr(part, "function_response", None)
+                    if fr and fr.name == "retrieve_docs":
+                        resp = fr.response or {}
+                        for s in resp.get("sources", []):
+                            sources.add(s)
+            if event.is_final_response() and event.content and event.content.parts:
+                text = event.content.parts[0].text
+                if text:
+                    final_text = text
+    finally:
+        # ADK sessions live in the InMemorySessionService forever otherwise;
+        # ask() is stateless (history is folded into the message), so drop the
+        # one-shot session to stop unbounded memory growth over a long run.
+        await app.session_service.delete_session(
+            app_name=APP_NAME, user_id=USER_ID, session_id=session_id
+        )
     return final_text, sorted(sources)
 
 
