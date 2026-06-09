@@ -18,6 +18,11 @@ The chat model and its fallback are configurable via the `GEMINI_CHAT_MODEL` and
 `GEMINI_FALLBACK_MODEL` env vars. When the primary model hits its free-tier
 quota, the agent automatically retries on the fallback model.
 
+> **Experimental:** a parallel answering backend built on the [Google Agent
+> Development Kit](https://google.github.io/adk-docs/) (`google-adk`) lives
+> alongside the LangChain one. Same docs, same usage dashboard — different agent.
+> See [Experimental: Google ADK backend](#experimental-google-adk-backend).
+
 ---
 
 ## Quick start
@@ -69,7 +74,11 @@ If a port is already in use, the launcher picks the next free port and prints th
 ```bash
 streamlit run src/app.py               # user chat  (port 8501)
 streamlit run src/admin.py             # admin UI   (port 8502)
+streamlit run src/adk_app.py           # experimental ADK chat (port 8501)
 ```
+
+Or launch the experimental ADK chat + admin together: `python run.py --adk`
+(see [Experimental: Google ADK backend](#experimental-google-adk-backend)).
 </details>
 
 ### 5. Add documents
@@ -87,15 +96,18 @@ rag-internal-agent-poc/
 ├── chroma_db/         ← vector store (auto-created, git-ignored)
 ├── usage_events.jsonl ← self-tracked API usage log (auto-created, git-ignored)
 ├── src/
-│   ├── ingest.py      ← file watcher + ChromaDB ingestion
+│   ├── ingest.py      ← file watcher + ChromaDB ingestion (shared by both backends)
 │   ├── agent.py       ← RAG chain (LangChain + Gemini) + session memory
-│   ├── usage.py       ← self-tracked API usage + rate-limit counters
-│   ├── app.py         ← Streamlit chat UI (user)
-│   └── admin.py       ← Streamlit admin UI (upload + usage dashboard)
-├── run.py             ← one-command launcher for both UIs
+│   ├── usage.py       ← self-tracked API usage + rate-limit counters (shared)
+│   ├── app.py         ← Streamlit chat UI (user, LangChain backend)
+│   ├── admin.py       ← Streamlit admin UI (upload + usage dashboard)
+│   ├── adk_agent.py   ← experimental Google ADK answering layer (parallel to agent.py)
+│   └── adk_app.py     ← experimental Streamlit chat UI (ADK backend)
+├── run.py             ← one-command launcher (add --adk for the ADK chat)
 ├── .env.example       ← copy to .env and add your API key
 ├── .gitignore
 ├── requirements.txt
+├── requirements-adk.txt ← extra deps for the ADK track (includes base reqs)
 └── README.md
 ```
 
@@ -123,6 +135,32 @@ Google exposes no API for current free-tier consumption, so the app counts its
 own calls and appends them to `usage_events.jsonl` (shared across the chat and
 admin processes). The **Admin** UI shows live requests/day, requests/min and
 tokens/min against the known free-tier caps per model.
+
+## Experimental: Google ADK backend
+
+A second answering backend built on the **Google Agent Development Kit**
+(`google-adk`) runs in parallel to the default LangChain one. It is *additive* —
+`app.py` / `agent.py` are untouched and remain the default. The stack may shift
+to ADK later, so this track is being matured before any switch.
+
+What it shares vs. what differs:
+
+- **Shared:** retrieval (the same ChromaDB vector store) and the usage log. A doc
+  ingested by the watcher is queryable from both backends, and ADK chat calls show
+  up in the same Admin dashboard.
+- **Different:** the answering layer. Retrieval is exposed to the model as an ADK
+  **tool** — the LLM forms the query and decides when to call it (this also
+  resolves follow-up references, replacing the LangChain rewrite step).
+
+```bash
+pip install -r requirements-adk.txt    # google-adk + base reqs
+python run.py --adk                     # ADK chat (8501) + admin (8502)
+# or:  streamlit run src/adk_app.py     # ADK chat only
+```
+
+> On a quota 429, ADK prints a verbose internal traceback to the console *before*
+> our handler catches it and retries on the fallback model. That console noise is
+> expected — the chat UI still shows a clean answer.
 
 ## Running on WSL (Windows Subsystem for Linux)
 
