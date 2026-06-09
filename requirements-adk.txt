@@ -3,4 +3,4 @@
 # still needs the base LangChain stack — so install the base requirements too.
 -r requirements.txt
 
-google-adk>=1.0.0
+google-adk>=2.2.0

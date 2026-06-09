@@ -45,7 +45,7 @@ Within a single process, `ingest.get_vectorstore()` returns one lazily-created `
 - **Same regex aggregate router** (`_AGGREGATE_RE`). The aggregate/exhaustive path is a manual map-reduce using the `google.genai` client directly (a single tool call can't scan a corpus larger than the context window).
 - **Fallback model** is done by retrying on a second ADK agent (ADK has no `.with_fallbacks`); quota 429s are caught and returned as a friendly message.
 - `build_app()`/`ask(app, question, history)` intentionally match `agent.build_chain()`/`ask()`. History is folded into the message text (ADK sessions are created fresh per `ask`) so `ask()` stays stateless and the caller owns history.
-- Needs `pip install -r requirements-adk.txt`. Runtime is unverified until deps + `GOOGLE_API_KEY` are present — verify manually via the ADK UI.
+- Needs `pip install -r requirements-adk.txt` (verified against `google-adk` 2.2.0) + `GOOGLE_API_KEY`. Note: on a quota 429, ADK logs a verbose internal traceback to the console *before* our handler catches it and retries on the fallback — that noise is expected, not a failure; the UI still shows a clean answer.
 
 ## Constraints & gotchas
 
