@@ -59,22 +59,21 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Run with no arguments and the launcher shows an interactive menu to pick what to start:
+Run with no arguments and the launcher shows an interactive menu to pick the chat backend (the admin UI always launches alongside it):
 
 ```
-  1) User chat + Admin   (LangChain, default)
-  2) User chat + Admin   (experimental Google ADK)
-  3) User chat only      (LangChain)
-  4) ADK chat only       (experimental)
-  5) Admin only
+  1) User chat   (LangChain, default)
+  2) User chat   (experimental Google ADK)
 ```
 
-Press **Enter** for the default (1) or **q** to quit. The default starts both interfaces at once:
+Press **Enter** for the default (1) or **q** to quit. Either choice starts both interfaces at once:
 
 | Interface | Default URL |
 |-----------|-------------|
 | User chat | `http://localhost:8501` |
 | Admin (document upload) | `http://localhost:8502` |
+
+Each page has a small top-right link to jump to the other (`Admin →` / `← Chat`).
 
 It runs a quick preflight check (warns if `GOOGLE_API_KEY` is unset, verifies ADK deps when needed), waits until each app is actually serving, then prints the URLs. If a port is already in use, the next free port is picked. Press **Ctrl+C** to stop.
 
@@ -84,8 +83,6 @@ It runs a quick preflight check (warns if `GOOGLE_API_KEY` is unset, verifies AD
 ```bash
 python run.py --langchain     # User chat + admin            [same as menu option 1]
 python run.py --adk           # experimental ADK chat + admin
-python run.py --chat-only     # chat without the admin UI
-python run.py --admin-only    # admin UI only
 python run.py --open          # also open each app in your browser when ready
 python run.py --help          # full flag list
 ```
