@@ -5,8 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-python run.py                          # launch both UIs (user chat + admin) together
+python run.py                          # interactive menu: pick what to launch (Enter = user chat + admin)
+python run.py --langchain              # user chat + admin, skipping the menu
 python run.py --adk                    # admin + experimental Google ADK chat instead of LangChain
+python run.py --chat-only              # chat without the admin UI
+python run.py --admin-only             # admin UI only
+python run.py --open                   # also open each app in the browser once it's serving
 streamlit run src/app.py               # user chat only  (port 8501)
 streamlit run src/adk_app.py           # experimental ADK chat only (port 8501)
 streamlit run src/admin.py             # admin only       (port 8502)
@@ -22,7 +26,7 @@ A `.env` with a real `GOOGLE_API_KEY` (free Google AI Studio key) is required fo
 
 A local RAG chatbot: a file watcher ingests `/docs` into ChromaDB, and a Streamlit chat answers questions via Gemini. The codebase is small (`src/` = 5 modules) but several non-obvious design decisions tie it together:
 
-**Two processes, one shared state on disk.** `run.py` spawns the user chat (`app.py`) and admin (`admin.py`) as *separate* Streamlit processes. They cannot share memory, so cross-process state lives on disk:
+**Two processes, one shared state on disk.** `run.py` spawns the user chat (`app.py`) and admin (`admin.py`) as *separate* Streamlit processes. (With no args `run.py` shows an interactive menu to choose what to launch; mode flags like `--adk`/`--chat-only`/`--admin-only` skip it. It also runs a preflight `GOOGLE_API_KEY`/ADK-deps check and waits for each app's port to accept connections before printing URLs.) They cannot share memory, so cross-process state lives on disk:
 - ChromaDB at `chroma_db/` (the vector store) — each process opens its own handle to the same persistent collection `rag_docs`.
 - `usage_events.jsonl` — an append-only usage log both processes write to and read from.
 

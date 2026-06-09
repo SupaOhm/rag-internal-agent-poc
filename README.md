@@ -59,14 +59,37 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Starts both interfaces at once:
+Run with no arguments and the launcher shows an interactive menu to pick what to start:
+
+```
+  1) User chat + Admin   (LangChain, default)
+  2) User chat + Admin   (experimental Google ADK)
+  3) User chat only      (LangChain)
+  4) ADK chat only       (experimental)
+  5) Admin only
+```
+
+Press **Enter** for the default (1) or **q** to quit. The default starts both interfaces at once:
 
 | Interface | Default URL |
 |-----------|-------------|
 | User chat | `http://localhost:8501` |
 | Admin (document upload) | `http://localhost:8502` |
 
-If a port is already in use, the launcher picks the next free port and prints the actual URLs. Press **Ctrl+C** to stop both.
+It runs a quick preflight check (warns if `GOOGLE_API_KEY` is unset, verifies ADK deps when needed), waits until each app is actually serving, then prints the URLs. If a port is already in use, the next free port is picked. Press **Ctrl+C** to stop.
+
+<details>
+<summary>Skip the menu with a flag</summary>
+
+```bash
+python run.py --langchain     # User chat + admin            [same as menu option 1]
+python run.py --adk           # experimental ADK chat + admin
+python run.py --chat-only     # chat without the admin UI
+python run.py --admin-only    # admin UI only
+python run.py --open          # also open each app in your browser when ready
+python run.py --help          # full flag list
+```
+</details>
 
 <details>
 <summary>Run individually</summary>
@@ -76,9 +99,6 @@ streamlit run src/app.py               # user chat  (port 8501)
 streamlit run src/admin.py             # admin UI   (port 8502)
 streamlit run src/adk_app.py           # experimental ADK chat (port 8501)
 ```
-
-Or launch the experimental ADK chat + admin together: `python run.py --adk`
-(see [Experimental: Google ADK backend](#experimental-google-adk-backend)).
 </details>
 
 ### 5. Add documents
@@ -103,7 +123,7 @@ rag-internal-agent-poc/
 │   ├── admin.py       ← Streamlit admin UI (upload + usage dashboard)
 │   ├── adk_agent.py   ← experimental Google ADK answering layer (parallel to agent.py)
 │   └── adk_app.py     ← experimental Streamlit chat UI (ADK backend)
-├── run.py             ← one-command launcher (add --adk for the ADK chat)
+├── run.py             ← one-command launcher (interactive menu; flags: --adk, --chat-only, …)
 ├── .env.example       ← copy to .env and add your API key
 ├── .gitignore
 ├── requirements.txt
