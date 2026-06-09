@@ -8,6 +8,7 @@ It deliberately imports only the ingestion layer, never `agent`/the chat UI.
 Uploaded files are saved to /docs and converted into the same RAG index the
 chatbot reads, so admin uploads behave exactly like dropping a file into /docs.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -22,6 +23,12 @@ import usage
 load_dotenv()
 
 st.set_page_config(page_title="Admin · Document Ingest", page_icon="🛠️", layout="centered")
+
+# CHAT_URL is set by run.py so the admin can jump back to the chat UI.
+_chat_url = os.getenv("CHAT_URL")
+if _chat_url:
+    st.sidebar.link_button("💬 Open Chat", _chat_url, use_container_width=True)
+
 st.title("Admin — Document Ingest")
 st.caption(
     "Upload PDF or TXT files. They are saved to /docs and converted into the "
