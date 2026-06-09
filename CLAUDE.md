@@ -6,9 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 python run.py                          # launch both UIs (user chat + admin) together
+python run.py --adk                    # admin + experimental Google ADK chat instead of LangChain
 streamlit run src/app.py               # user chat only  (port 8501)
+streamlit run src/adk_app.py           # experimental ADK chat only (port 8501)
 streamlit run src/admin.py             # admin only       (port 8502)
 pip install -r requirements.txt        # install deps (Python 3.10+, use a venv)
+pip install -r requirements-adk.txt    # extra deps for the ADK track (includes the base reqs)
 ```
 
 There is no test suite, linter, or build step. Verification is manual via the Streamlit UIs.
@@ -35,6 +38,14 @@ Within a single process, `ingest.get_vectorstore()` returns one lazily-created `
 **Conversation memory is session-only.** History lives in `st.session_state.messages` (`app.py`) and is passed into `ask()`; nothing is persisted. Only the last `_MAX_HISTORY_MESSAGES` (8) turns are kept to protect the token budget.
 
 **Usage tracking is self-reported** (`src/usage.py`), because Google exposes no API for current consumption. Chat calls are counted via `UsageCallback` (a LangChain `BaseCallbackHandler` attached to every `ChatGoogleGenerativeAI`, reading real model name + token counts off the response). Embeddings are counted by `TrackedGoogleEmbeddings` (subclass overriding `embed_documents`/`embed_query`) in `ingest.py` — note the free tier counts **one request per embedded text**, so a batch of N docs = N requests. `record()` never raises (tracking must not break the request path). `stats()` aggregates rpd/rpm/tpm against the hardcoded `LIMITS` table; daily counts reset at midnight Pacific.
+
+**Parallel ADK track (experimental, not merged into the default path).** `src/adk_agent.py` + `src/adk_app.py` re-implement the answering layer on the Google Agent Development Kit (`google-adk`) instead of LangChain, as an alternate architecture under active development. They are *additive* — `app.py`/`agent.py` remain the default and are untouched. Key design choices, deliberately mirroring the LangChain side so the two diff cleanly:
+- **Shared, not duplicated:** retrieval (`ingest.get_vectorstore`) and usage tracking (`usage.record`). A doc ingested by the watcher is queryable from both backends, and ADK chat calls land in the same admin dashboard.
+- **Retrieval is an ADK tool.** `retrieve_docs(query)` is exposed to the model; the LLM forms the query and decides when to call it (this also handles follow-up reference resolution, replacing the LangChain `standalone_question` rewrite). The answer prompt instruction forbids answering outside retrieved context.
+- **Same regex aggregate router** (`_AGGREGATE_RE`). The aggregate/exhaustive path is a manual map-reduce using the `google.genai` client directly (a single tool call can't scan a corpus larger than the context window).
+- **Fallback model** is done by retrying on a second ADK agent (ADK has no `.with_fallbacks`); quota 429s are caught and returned as a friendly message.
+- `build_app()`/`ask(app, question, history)` intentionally match `agent.build_chain()`/`ask()`. History is folded into the message text (ADK sessions are created fresh per `ask`) so `ask()` stays stateless and the caller owns history.
+- Needs `pip install -r requirements-adk.txt`. Runtime is unverified until deps + `GOOGLE_API_KEY` are present — verify manually via the ADK UI.
 
 ## Constraints & gotchas
 
